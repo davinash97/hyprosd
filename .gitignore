@@ -3,6 +3,7 @@
 /.idea
 /.vscode
 .env
+.claude
 /aur/*
 !/aur/PKGBUILD
 !/aur/.SRCINFO

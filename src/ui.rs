@@ -62,6 +62,11 @@ impl OsdUi {
         root.set_widget_name("hyprosd-root");
         root.set_css_classes(&["hyprosd-transparent"]);
 
+        // read once at startup: picks the dark or light palette based on the desktop's
+        // light/dark preference, falling back to the config default (dark) if that
+        // preference can't be read
+        let theme = resolve_theme_colors(config);
+
         let drawing = gtk4::DrawingArea::new();
         drawing.set_content_width(config.osd.width);
         drawing.set_content_height(config.osd.height);
@@ -70,6 +75,8 @@ impl OsdUi {
 
         let draw_state = Rc::new(RefCell::new(DrawState::new()));
         let config_ref = config.clone();
+        let (bg_r, bg_g, bg_b, bg_a) = theme.background;
+        let (fg_r, fg_g, fg_b, _) = theme.foreground;
         drawing.set_draw_func(move |_, cr, width, height| {
             // clear the whole drawing area first so only our rounded shape remains
             cr.set_operator(gtk4::cairo::Operator::Source);
@@ -77,15 +84,11 @@ impl OsdUi {
             let _ = cr.paint();
             cr.set_operator(gtk4::cairo::Operator::Over);
 
-            let (bg_r, bg_g, bg_b, bg_a) =
-                parse_rgba(&config_ref.theme.background).unwrap_or((0.17, 0.17, 0.17, 0.94));
             let radius = config_ref.theme.corner_radius as f64;
             rounded_rect(cr, 0.0, 0.0, width as f64, height as f64, radius);
             cr.set_source_rgba(bg_r, bg_g, bg_b, bg_a);
             let _ = cr.fill();
 
-            let (fg_r, fg_g, fg_b, _) =
-                parse_rgba(&config_ref.theme.foreground).unwrap_or((1.0, 1.0, 1.0, 1.0));
             cr.set_source_rgba(fg_r, fg_g, fg_b, 1.0);
             rounded_rect(
                 cr,
@@ -115,22 +118,23 @@ impl OsdUi {
 
         let draw_state_ref = draw_state.clone();
         let config_ref = config.clone();
+        let (fg_r, fg_g, fg_b, _) = theme.foreground;
+        let (accent_r, accent_g, accent_b, accent_a) = theme.accent;
         bar_area.set_draw_func(move |_, cr, width, height| {
             let state = draw_state_ref.borrow();
             let DrawMode::Value { level } = state.mode else {
                 return;
             };
-            let (fg_r, fg_g, fg_b, fg_a) =
-                parse_rgba(&config_ref.theme.foreground).unwrap_or((1.0, 1.0, 1.0, 1.0));
             let bar_height = config_ref.osd.bar_height.max(1) as f64;
             let y = ((height as f64) - bar_height) / 2.0;
+            // track stays a dim version of the foreground; the fill uses the accent color
             cr.rectangle(0.0, y, width as f64, bar_height);
             cr.set_source_rgba(fg_r, fg_g, fg_b, 0.35);
             let _ = cr.fill();
 
             let fill_width = (width as f64) * (level as f64 / 100.0);
             cr.rectangle(0.0, y, fill_width, bar_height);
-            cr.set_source_rgba(fg_r, fg_g, fg_b, fg_a);
+            cr.set_source_rgba(accent_r, accent_g, accent_b, accent_a);
             let _ = cr.fill();
         });
 
@@ -155,7 +159,7 @@ impl OsdUi {
         root.set_center_widget(Some(&overlay));
         window.set_child(Some(&root));
 
-        apply_css(config)?;
+        apply_css(config, &theme)?;
 
         Ok(Self {
             window,
@@ -294,7 +298,7 @@ fn set_icon_with_fallback(icon: &gtk4::Image, primary: &str, fallback: &str) {
     }
 }
 
-fn apply_css(config: &Config) -> anyhow::Result<()> {
+fn apply_css(config: &Config, theme: &ThemeColors) -> anyhow::Result<()> {
     let css = format!(
         r#"
         /* keep gtk's window background from showing behind the rounded cairo shape */
@@ -325,13 +329,15 @@ fn apply_css(config: &Config) -> anyhow::Result<()> {
             background-color: transparent;
         }}
         #hyprosd-icon {{
-            color: {};
+            color: {fg_css};
         }}
         #hyprosd-icon.hyprosd-muted {{
-            color: rgba(245, 245, 245, 0.55);
+            color: {muted_css};
         }}
         "#,
-        config.theme.padding, config.theme.foreground,
+        config.theme.padding,
+        fg_css = theme.foreground_css(),
+        muted_css = theme.muted_css(),
     );
 
     let provider = gtk4::CssProvider::new();
@@ -342,6 +348,76 @@ fn apply_css(config: &Config) -> anyhow::Result<()> {
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
     Ok(())
+}
+
+struct ThemeColors {
+    background: (f64, f64, f64, f64),
+    foreground: (f64, f64, f64, f64),
+    accent: (f64, f64, f64, f64),
+}
+
+impl ThemeColors {
+    fn foreground_css(&self) -> String {
+        let (r, g, b, a) = self.foreground;
+        format!(
+            "rgba({}, {}, {}, {a})",
+            (r * 255.0).round() as u8,
+            (g * 255.0).round() as u8,
+            (b * 255.0).round() as u8,
+        )
+    }
+
+    fn muted_css(&self) -> String {
+        let (r, g, b, _) = self.foreground;
+        format!(
+            "rgba({}, {}, {}, 0.55)",
+            (r * 255.0).round() as u8,
+            (g * 255.0).round() as u8,
+            (b * 255.0).round() as u8,
+        )
+    }
+}
+
+// picks a dark or light palette based on the desktop's light/dark preference
+// (org.gnome.desktop.interface color-scheme, read the same way query.rs shells out to
+// wpctl/pactl). GTK's own theme-color APIs (StyleContext::lookup_color and friends)
+// turned out to be non-functional on this GTK build for an unmapped daemon window --
+// confirmed by forcing gtk-theme-name/prefer-dark-theme directly and pumping the main
+// loop, which still always resolved to white/black -- so we track light/dark ourselves
+// instead of trying to sample the theme's exact colors.
+fn resolve_theme_colors(config: &Config) -> ThemeColors {
+    // the accent is a fixed user color (not scheme-dependent), used the same in both palettes
+    let accent = parse_rgba(&config.theme.accent).unwrap_or((0.14, 0.48, 0.88, 1.0));
+
+    let dark = ThemeColors {
+        background: parse_rgba(&config.theme.background).unwrap_or((0.09, 0.09, 0.09, 0.8)),
+        foreground: parse_rgba(&config.theme.foreground).unwrap_or((1.0, 1.0, 1.0, 1.0)),
+        accent,
+    };
+    let light = ThemeColors {
+        background: (0.96, 0.96, 0.96, 0.85),
+        foreground: (0.1, 0.1, 0.1, 1.0),
+        accent,
+    };
+
+    match query_gsetting("color-scheme").as_deref() {
+        Some(scheme) if scheme.contains("light") => light,
+        // "prefer-dark", "default", or unreadable: keep hyprosd's original look
+        _ => dark,
+    }
+}
+
+fn query_gsetting(key: &str) -> Option<String> {
+    let output = std::process::Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", key])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout);
+    let value = value.trim().trim_matches('\'');
+    if value.is_empty() { None } else { Some(value.to_string()) }
 }
 
 fn rounded_rect(cr: &gtk4::cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {

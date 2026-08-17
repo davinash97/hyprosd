@@ -25,6 +25,8 @@ pub struct OsdConfig {
 pub struct ThemeConfig {
     pub background: String,
     pub foreground: String,
+    // used for the volume/brightness bar fill, in both light and dark mode
+    pub accent: String,
     pub corner_radius: i32,
     pub padding: i32,
     pub icon_size: i32,
@@ -50,6 +52,7 @@ impl Default for Config {
             theme: ThemeConfig {
                 background: "#181818cc".to_string(),
                 foreground: "#ffffff".to_string(),
+                accent: "#247be0".to_string(),
                 corner_radius: 20,
                 padding: 18,
                 icon_size: 26,

@@ -47,6 +47,12 @@ bind = ,XF86MonBrightnessDown, exec, brightnessctl s 10%- && hyprosd show bright
 bind = ,XF86MonBrightnessUp, exec, brightnessctl s +10% && hyprosd show brightness
 ```
 
+## Theming
+
+The OSD follows your desktop's light/dark preference (`org.gnome.desktop.interface color-scheme`), switching between a dark and a light palette accordingly. Shape, sizing, icons, and corner radius are unaffected — only the colors adapt. If that preference can't be read, it falls back to the original dark/translucent look.
+
+The volume/brightness bar fill uses an accent color (default `#247be0`), the same in both light and dark mode. It's not read from the system automatically (GTK/GNOME don't expose a reliable way to query it outside a full desktop session) — it's set via `ThemeConfig::accent` in `src/config.rs` until file-based config loading lands.
+
 Blur rules:
 
 ```
