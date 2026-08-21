@@ -76,7 +76,7 @@ impl OsdUi {
         let draw_state = Rc::new(RefCell::new(DrawState::new()));
         let config_ref = config.clone();
         let (bg_r, bg_g, bg_b, bg_a) = theme.background;
-        let (fg_r, fg_g, fg_b, _) = theme.foreground;
+        let (border_r, border_g, border_b, border_a) = theme.border;
         drawing.set_draw_func(move |_, cr, width, height| {
             // clear the whole drawing area first so only our rounded shape remains
             cr.set_operator(gtk4::cairo::Operator::Source);
@@ -89,7 +89,7 @@ impl OsdUi {
             cr.set_source_rgba(bg_r, bg_g, bg_b, bg_a);
             let _ = cr.fill();
 
-            cr.set_source_rgba(fg_r, fg_g, fg_b, 1.0);
+            cr.set_source_rgba(border_r, border_g, border_b, border_a);
             rounded_rect(
                 cr,
                 0.5,
@@ -354,6 +354,7 @@ struct ThemeColors {
     background: (f64, f64, f64, f64),
     foreground: (f64, f64, f64, f64),
     accent: (f64, f64, f64, f64),
+    border: (f64, f64, f64, f64),
 }
 
 impl ThemeColors {
@@ -389,15 +390,19 @@ fn resolve_theme_colors(config: &Config) -> ThemeColors {
     // the accent is a fixed user color (not scheme-dependent), used the same in both palettes
     let accent = parse_rgba(&config.theme.accent).unwrap_or((0.14, 0.48, 0.88, 1.0));
 
+    // borders mirror ~/.config/waybar's window#waybar border (@borderCol) in each mode,
+    // so the OSD's outline matches the bar it sits alongside
     let dark = ThemeColors {
         background: parse_rgba(&config.theme.background).unwrap_or((0.09, 0.09, 0.09, 0.8)),
         foreground: parse_rgba(&config.theme.foreground).unwrap_or((1.0, 1.0, 1.0, 1.0)),
         accent,
+        border: (1.0, 1.0, 1.0, 0.18),
     };
     let light = ThemeColors {
         background: (0.96, 0.96, 0.96, 0.85),
         foreground: (0.1, 0.1, 0.1, 1.0),
         accent,
+        border: (30.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0, 0.18),
     };
 
     match query_gsetting("color-scheme").as_deref() {
