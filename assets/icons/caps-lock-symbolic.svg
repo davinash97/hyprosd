@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" opacity="1">
+  <rect x="1" y="1" width="14" height="14" rx="3" ry="3" fill="none" stroke="#2e3436" stroke-width="1.2"/>
+  <text x="8" y="8" text-anchor="middle" dominant-baseline="central" font-family="Google Sans, Adwaita Sans, sans-serif" font-weight="700" font-size="6.6" fill="#2e3436">A</text>
+</svg>

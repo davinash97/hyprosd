@@ -15,6 +15,7 @@ pub struct OsdUi {
     hide_source: Rc<RefCell<Option<gtk4::glib::SourceId>>>,
     draw_state: Rc<RefCell<DrawState>>,
     config: Config,
+    theme: ThemeColors,
 }
 
 impl OsdUi {
@@ -170,6 +171,7 @@ impl OsdUi {
             hide_source: Rc::new(RefCell::new(None)),
             draw_state,
             config: config.clone(),
+            theme,
         })
     }
 
@@ -186,6 +188,7 @@ impl OsdUi {
                 } else {
                     "audio-volume-high-symbolic"
                 };
+                self.icon.set_pixel_size(self.config.theme.icon_size);
                 self.icon.set_from_icon_name(Some(icon));
                 if muted || level == 0 {
                     self.icon.add_css_class("hyprosd-muted");
@@ -197,6 +200,7 @@ impl OsdUi {
             }
             OsdEvent::Brightness { level } => {
                 self.set_layout(LayoutKind::Value);
+                self.icon.set_pixel_size(self.config.theme.icon_size);
                 self.icon
                     .set_from_icon_name(Some("display-brightness-symbolic"));
                 self.icon.remove_css_class("hyprosd-muted");
@@ -205,17 +209,29 @@ impl OsdUi {
             }
             OsdEvent::CapsLock { on } => {
                 self.set_layout(LayoutKind::Lock);
-                set_icon_with_fallback(&self.icon, "caps-lock-symbolic", "input-keyboard-symbolic");
-                if on {
-                    self.icon.remove_css_class("hyprosd-muted");
-                } else {
-                    self.icon.add_css_class("hyprosd-muted");
+                // caps lock uses a bundled icon instead of the active GTK icon theme,
+                // since not every theme ships a caps-lock glyph (unlike the others below).
+                // the on/off color is baked into the file directly rather than via CSS,
+                // since GTK's symbolic recoloring only reliably kicks in for icons looked
+                // up by name through an icon theme, not ones loaded from an arbitrary file
+                let color = if on { self.theme.foreground } else { self.theme.muted() };
+                // matches the other icons' pixel size so the border-to-icon buffer is
+                // consistent across every OSD layout
+                self.icon.set_pixel_size(self.config.theme.icon_size);
+                match caps_lock_icon_path(color) {
+                    Some(path) => self.icon.set_from_file(Some(path)),
+                    None => set_icon_with_fallback(
+                        &self.icon,
+                        "caps-lock-symbolic",
+                        "input-keyboard-symbolic",
+                    ),
                 }
                 self.draw_state.borrow_mut().set_lock();
                 self.queue_redraw();
             }
             OsdEvent::NumLock { on } => {
                 self.set_layout(LayoutKind::Lock);
+                self.icon.set_pixel_size(self.config.theme.icon_size);
                 self.icon
                     .set_from_icon_name(Some("input-keyboard-symbolic"));
                 if on {
@@ -279,6 +295,34 @@ impl OsdUi {
         self.bar_area.queue_draw();
         self.drawing.queue_draw();
     }
+}
+
+// bundled at compile time so the caps lock icon always renders the same regardless
+// of which GTK icon theme is active. the template's placeholder color/opacity are
+// swapped for the OSD's actual foreground before writing it out, since GTK's
+// symbolic-icon CSS recoloring only reliably applies to icons looked up by name
+// through an icon theme, not ones loaded directly from an arbitrary file
+const CAPS_LOCK_ICON_TEMPLATE: &str = include_str!("../assets/icons/caps-lock-symbolic.svg");
+
+fn caps_lock_icon_path(color: (f64, f64, f64, f64)) -> Option<std::path::PathBuf> {
+    let (r, g, b, a) = color;
+    let hex = format!(
+        "#{:02x}{:02x}{:02x}",
+        (r * 255.0).round() as u8,
+        (g * 255.0).round() as u8,
+        (b * 255.0).round() as u8,
+    );
+    let svg = CAPS_LOCK_ICON_TEMPLATE
+        .replace("#2e3436", &hex)
+        .replace("opacity=\"1\"", &format!("opacity=\"{a}\""));
+
+    let cache_home = std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".cache")))?;
+    let path = cache_home.join("hyprosd").join("caps-lock-symbolic.svg");
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    std::fs::write(&path, svg).ok()?;
+    Some(path)
 }
 
 fn set_icon_with_fallback(icon: &gtk4::Image, primary: &str, fallback: &str) {
@@ -376,6 +420,13 @@ impl ThemeColors {
             (g * 255.0).round() as u8,
             (b * 255.0).round() as u8,
         )
+    }
+
+    // same dimming used by the `hyprosd-muted` CSS class, as a raw color for icons
+    // that can't rely on CSS (see caps_lock_icon_path)
+    fn muted(&self) -> (f64, f64, f64, f64) {
+        let (r, g, b, _) = self.foreground;
+        (r, g, b, 0.55)
     }
 }
 

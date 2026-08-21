@@ -44,7 +44,7 @@ impl Default for Config {
             osd: OsdConfig {
                 width: 288,
                 height: 53,
-                lock_size: 58,
+                lock_size: 53,
                 bar_height: 1,
                 timeout_ms: 1600,
                 offset_y: 60,
@@ -76,7 +76,7 @@ fn default_backlight_device_path() -> Option<PathBuf> {
 }
 
 fn default_lock_size() -> i32 {
-    58
+    53
 }
 
 fn default_bar_height() -> i32 {
