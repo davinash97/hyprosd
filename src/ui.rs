@@ -10,6 +10,7 @@ pub struct OsdUi {
     window: gtk4::Window,
     icon: gtk4::Image,
     bar_area: gtk4::DrawingArea,
+    percent_label: gtk4::Label,
     drawing: gtk4::DrawingArea,
     overlay: gtk4::Overlay,
     hide_source: Rc<RefCell<Option<gtk4::glib::SourceId>>>,
@@ -20,16 +21,23 @@ pub struct OsdUi {
 
 impl OsdUi {
     pub fn new(config: &Config) -> anyhow::Result<Self> {
+        let padding = config.theme.padding;
+        let icon_size = config.theme.icon_size;
+        let bar_width = 120;
+        let label_width = 45;
+        let spacing = 18;
+        let dynamic_width = (padding * 2) + icon_size + bar_width + label_width + (spacing * 2);
+        let height = config.osd.height;
+
         let window = gtk4::Window::new();
         window.set_decorated(false);
         window.set_resizable(false);
         window.set_visible(false);
-        window.set_default_size(config.osd.width, config.osd.height);
+        window.set_default_size(dynamic_width, height);
         window.set_widget_name("hyprosd-window");
-        window.set_css_classes(&["hyprosd-transparent"]);
+        window.set_css_classes(&["hyprosd-transparent"] as &[&str]);
 
         window.init_layer_shell();
-        // this is what hyprctl layers shows, and what users can target with layer rules
         window.set_namespace("hyprosd");
         window.set_layer(layer_shell::Layer::Overlay);
         window.set_anchor(layer_shell::Edge::Bottom, true);
@@ -38,7 +46,6 @@ impl OsdUi {
         window.set_exclusive_zone(0);
         window.set_margin(layer_shell::Edge::Bottom, config.osd.offset_y);
         window.connect_realize(|window| {
-            // the rounded corners need the compositor to treat the surface as non-opaque
             let surface = window.surface();
             surface.set_opaque_region(None);
         });
@@ -50,8 +57,7 @@ impl OsdUi {
             {
                 window.set_monitor(&monitor);
                 let geometry = monitor.geometry();
-                // layer-shell anchors to edges, so we center by setting the left margin ourselves
-                let margin_left = ((geometry.width() - config.osd.width).max(0)) / 2;
+                let margin_left = ((geometry.width() - dynamic_width).max(0)) / 2;
                 window.set_margin(layer_shell::Edge::Left, margin_left);
             }
         }
@@ -61,25 +67,21 @@ impl OsdUi {
         root.set_vexpand(true);
         root.set_halign(gtk4::Align::Fill);
         root.set_widget_name("hyprosd-root");
-        root.set_css_classes(&["hyprosd-transparent"]);
+        root.set_css_classes(&["hyprosd-transparent"] as &[&str]);
 
-        // read once at startup: picks the dark or light palette based on the desktop's
-        // light/dark preference, falling back to the config default (dark) if that
-        // preference can't be read
         let theme = resolve_theme_colors(config);
 
         let drawing = gtk4::DrawingArea::new();
-        drawing.set_content_width(config.osd.width);
-        drawing.set_content_height(config.osd.height);
+        drawing.set_content_width(dynamic_width);
+        drawing.set_content_height(height);
         drawing.set_widget_name("hyprosd-surface");
-        drawing.set_css_classes(&["hyprosd-transparent"]);
+        drawing.set_css_classes(&["hyprosd-transparent"] as &[&str]);
 
         let draw_state = Rc::new(RefCell::new(DrawState::new()));
         let config_ref = config.clone();
         let (bg_r, bg_g, bg_b, bg_a) = theme.background;
         let (border_r, border_g, border_b, border_a) = theme.border;
         drawing.set_draw_func(move |_, cr, width, height| {
-            // clear the whole drawing area first so only our rounded shape remains
             cr.set_operator(gtk4::cairo::Operator::Source);
             cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
             let _ = cr.paint();
@@ -109,13 +111,17 @@ impl OsdUi {
         icon.set_valign(gtk4::Align::Center);
 
         let bar_area = gtk4::DrawingArea::new();
-        let bar_width =
-            (config.osd.width - (config.theme.padding * 2) - config.theme.icon_size - 18).max(80);
         let bar_height = config.osd.bar_height.max(1);
+
         bar_area.set_content_width(bar_width);
         bar_area.set_content_height(bar_height);
         bar_area.set_size_request(bar_width, bar_height);
         bar_area.set_widget_name("hyprosd-bar");
+
+        let percent_label = gtk4::Label::new(Some("0%"));
+        percent_label.set_widget_name("hyprosd-percent");
+        percent_label.set_halign(gtk4::Align::Center);
+        percent_label.set_valign(gtk4::Align::Center);
 
         let draw_state_ref = draw_state.clone();
         let config_ref = config.clone();
@@ -128,7 +134,6 @@ impl OsdUi {
             };
             let bar_height = config_ref.osd.bar_height.max(1) as f64;
             let y = ((height as f64) - bar_height) / 2.0;
-            // track stays a dim version of the foreground; the fill uses the accent color
             cr.rectangle(0.0, y, width as f64, bar_height);
             cr.set_source_rgba(fg_r, fg_g, fg_b, 0.35);
             let _ = cr.fill();
@@ -139,23 +144,24 @@ impl OsdUi {
             let _ = cr.fill();
         });
 
-        let content = gtk4::Box::new(gtk4::Orientation::Horizontal, 18);
+        let content = gtk4::Box::new(gtk4::Orientation::Horizontal, spacing);
         content.set_halign(gtk4::Align::Center);
         content.set_valign(gtk4::Align::Center);
         content.set_widget_name("hyprosd-content");
-        content.set_css_classes(&["hyprosd-transparent"]);
-        content.set_margin_start(config.theme.padding);
-        content.set_margin_end(config.theme.padding);
+        content.set_css_classes(&["hyprosd-transparent"] as &[&str]);
+        content.set_margin_start(padding);
+        content.set_margin_end(padding);
         content.append(&icon);
         content.append(&bar_area);
+        content.append(&percent_label);
 
         let overlay = gtk4::Overlay::new();
-        overlay.set_size_request(config.osd.width, config.osd.height);
+        overlay.set_size_request(dynamic_width, height);
         overlay.set_child(Some(&drawing));
         overlay.add_overlay(&content);
         overlay.set_halign(gtk4::Align::Center);
         overlay.set_valign(gtk4::Align::Center);
-        overlay.set_css_classes(&["hyprosd-transparent"]);
+        overlay.set_css_classes(&["hyprosd-transparent"] as &[&str]);
 
         root.set_center_widget(Some(&overlay));
         window.set_child(Some(&root));
@@ -166,6 +172,7 @@ impl OsdUi {
             window,
             icon,
             bar_area,
+            percent_label,
             drawing,
             overlay,
             hide_source: Rc::new(RefCell::new(None)),
@@ -195,6 +202,7 @@ impl OsdUi {
                 } else {
                     self.icon.remove_css_class("hyprosd-muted");
                 }
+                self.percent_label.set_text(&format!("{}%", level));
                 self.draw_state.borrow_mut().set_level(level);
                 self.queue_redraw();
             }
@@ -204,19 +212,13 @@ impl OsdUi {
                 self.icon
                     .set_from_icon_name(Some("display-brightness-symbolic"));
                 self.icon.remove_css_class("hyprosd-muted");
+                self.percent_label.set_text(&format!("{}%", level));
                 self.draw_state.borrow_mut().set_level(level);
                 self.queue_redraw();
             }
             OsdEvent::CapsLock { on } => {
                 self.set_layout(LayoutKind::Lock);
-                // caps lock uses a bundled icon instead of the active GTK icon theme,
-                // since not every theme ships a caps-lock glyph (unlike the others below).
-                // the on/off color is baked into the file directly rather than via CSS,
-                // since GTK's symbolic recoloring only reliably kicks in for icons looked
-                // up by name through an icon theme, not ones loaded from an arbitrary file
                 let color = if on { self.theme.foreground } else { self.theme.muted() };
-                // matches the other icons' pixel size so the border-to-icon buffer is
-                // consistent across every OSD layout
                 self.icon.set_pixel_size(self.config.theme.icon_size);
                 match caps_lock_icon_path(color) {
                     Some(path) => self.icon.set_from_file(Some(path)),
@@ -252,7 +254,6 @@ impl OsdUi {
         let window = self.window.clone();
         let hide_source = self.hide_source.clone();
         let timeout = self.config.osd.timeout_ms;
-        // each event replaces the old timer so repeated key presses keep the osd visible
         let source_id =
             gtk4::glib::timeout_add_local(std::time::Duration::from_millis(timeout), move || {
                 window.set_visible(false);
@@ -263,19 +264,31 @@ impl OsdUi {
     }
 
     fn set_layout(&mut self, kind: LayoutKind) {
+        let padding = self.config.theme.padding;
+        let icon_size = self.config.theme.icon_size;
+        let bar_width = 120;
+        let label_width = 45;
+        let spacing = 18;
+        let dynamic_width = (padding * 2) + icon_size + bar_width + label_width + (spacing * 2);
+
         let (width, height) = match kind {
-            LayoutKind::Value => (self.config.osd.width, self.config.osd.height),
+            LayoutKind::Value => (dynamic_width, self.config.osd.height),
             LayoutKind::Lock => (self.config.osd.lock_size, self.config.osd.lock_size),
         };
+        
         self.window.set_default_size(width, height);
         self.drawing.set_content_width(width);
         self.drawing.set_content_height(height);
         self.overlay.set_size_request(width, height);
+        
         if matches!(kind, LayoutKind::Lock) {
             self.bar_area.set_visible(false);
+            self.percent_label.set_visible(false);
         } else {
             self.bar_area.set_visible(true);
+            self.percent_label.set_visible(true);
         }
+
         if let Some(display) = gtk4::gdk::Display::default() {
             let monitors = display.monitors();
             if let Some(monitor) = monitors
@@ -284,7 +297,6 @@ impl OsdUi {
             {
                 self.window.set_monitor(&monitor);
                 let geometry = monitor.geometry();
-                // lock osds are narrower, so recenter whenever the layout changes
                 let margin_left = ((geometry.width() - width).max(0)) / 2;
                 self.window.set_margin(layer_shell::Edge::Left, margin_left);
             }
@@ -297,11 +309,6 @@ impl OsdUi {
     }
 }
 
-// bundled at compile time so the caps lock icon always renders the same regardless
-// of which GTK icon theme is active. the template's placeholder color/opacity are
-// swapped for the OSD's actual foreground before writing it out, since GTK's
-// symbolic-icon CSS recoloring only reliably applies to icons looked up by name
-// through an icon theme, not ones loaded directly from an arbitrary file
 const CAPS_LOCK_ICON_TEMPLATE: &str = include_str!("../assets/icons/caps-lock-symbolic.svg");
 
 fn caps_lock_icon_path(color: (f64, f64, f64, f64)) -> Option<std::path::PathBuf> {
@@ -334,7 +341,6 @@ fn set_icon_with_fallback(icon: &gtk4::Image, primary: &str, fallback: &str) {
         }
     };
     let theme = gtk4::IconTheme::for_display(&display);
-    // some icon themes do not ship a caps-lock symbol
     if theme.has_icon(primary) {
         icon.set_from_icon_name(Some(primary));
     } else {
@@ -345,7 +351,6 @@ fn set_icon_with_fallback(icon: &gtk4::Image, primary: &str, fallback: &str) {
 fn apply_css(config: &Config, theme: &ThemeColors) -> anyhow::Result<()> {
     let css = format!(
         r#"
-        /* keep gtk's window background from showing behind the rounded cairo shape */
         window#hyprosd-window,
         window#hyprosd-window.background,
         window#hyprosd-window.hyprosd-transparent,
@@ -377,6 +382,10 @@ fn apply_css(config: &Config, theme: &ThemeColors) -> anyhow::Result<()> {
         }}
         #hyprosd-icon.hyprosd-muted {{
             color: {muted_css};
+        }}
+        #hyprosd-icon,
+        #hyprosd-percent {{
+            color: {fg_css};
         }}
         "#,
         config.theme.padding,
@@ -422,27 +431,15 @@ impl ThemeColors {
         )
     }
 
-    // same dimming used by the `hyprosd-muted` CSS class, as a raw color for icons
-    // that can't rely on CSS (see caps_lock_icon_path)
     fn muted(&self) -> (f64, f64, f64, f64) {
         let (r, g, b, _) = self.foreground;
         (r, g, b, 0.55)
     }
 }
 
-// picks a dark or light palette based on the desktop's light/dark preference
-// (org.gnome.desktop.interface color-scheme, read the same way query.rs shells out to
-// wpctl/pactl). GTK's own theme-color APIs (StyleContext::lookup_color and friends)
-// turned out to be non-functional on this GTK build for an unmapped daemon window --
-// confirmed by forcing gtk-theme-name/prefer-dark-theme directly and pumping the main
-// loop, which still always resolved to white/black -- so we track light/dark ourselves
-// instead of trying to sample the theme's exact colors.
 fn resolve_theme_colors(config: &Config) -> ThemeColors {
-    // the accent is a fixed user color (not scheme-dependent), used the same in both palettes
     let accent = parse_rgba(&config.theme.accent).unwrap_or((0.14, 0.48, 0.88, 1.0));
 
-    // borders mirror ~/.config/waybar's window#waybar border (@borderCol) in each mode,
-    // so the OSD's outline matches the bar it sits alongside
     let dark = ThemeColors {
         background: parse_rgba(&config.theme.background).unwrap_or((0.09, 0.09, 0.09, 0.8)),
         foreground: parse_rgba(&config.theme.foreground).unwrap_or((1.0, 1.0, 1.0, 1.0)),
@@ -458,7 +455,6 @@ fn resolve_theme_colors(config: &Config) -> ThemeColors {
 
     match query_gsetting("color-scheme").as_deref() {
         Some(scheme) if scheme.contains("light") => light,
-        // "prefer-dark", "default", or unreadable: keep hyprosd's original look
         _ => dark,
     }
 }
